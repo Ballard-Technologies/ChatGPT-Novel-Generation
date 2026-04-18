@@ -11,11 +11,8 @@ function loadCurrentUser() {
         })
         .then(function (data) {
             if (!data) return;
-            $('#user-email').text(data.email);
+            $('#user-username').text(data.username);
             $('#logout-link').show();
-            if (!data.email_verified) {
-                window.location.href = '/verify-notice';
-            }
         })
         .catch(function (err) { console.error('Failed to load user:', err); });
 }

@@ -5,8 +5,9 @@
 <form method="post" action="{{ url_for('auth.signup') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="field">
-        <label class="inputLabel" for="email">Email</label>
-        <input type="email" id="email" name="email" value="{{ email or '' }}" required autocomplete="email">
+        <label class="inputLabel" for="username">Username</label>
+        <input type="text" id="username" name="username" value="{{ username or '' }}" required
+               minlength="3" maxlength="32" pattern="[A-Za-z][A-Za-z0-9_\-]*" autocomplete="username">
     </div>
     <div class="field">
         <label class="inputLabel" for="password">Password</label>

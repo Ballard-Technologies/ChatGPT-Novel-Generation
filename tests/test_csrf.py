@@ -16,7 +16,7 @@ def _extract_csrf_token(html):
 
 def test_signup_post_without_csrf_is_rejected(csrf_client):
     resp = csrf_client.post('/signup', data={
-        'email': 'x@example.com',
+        'username': 'csrfuser',
         'password': 'password123',
         'confirm_password': 'password123',
     })
@@ -25,15 +25,9 @@ def test_signup_post_without_csrf_is_rejected(csrf_client):
 
 def test_login_post_without_csrf_is_rejected(csrf_client):
     resp = csrf_client.post('/login', data={
-        'email': 'x@example.com',
+        'username': 'csrfuser',
         'password': 'password123',
     })
-    assert resp.status_code == 400
-
-
-def test_forgot_password_post_without_csrf_is_rejected(csrf_client):
-    resp = csrf_client.post('/forgot-password',
-                             data={'email': 'x@example.com'})
     assert resp.status_code == 400
 
 
@@ -48,7 +42,7 @@ def test_signup_with_csrf_token_succeeds(csrf_client, flask_app):
     token = _extract_csrf_token(resp.get_data(as_text=True))
     resp = csrf_client.post('/signup', data={
         'csrf_token': token,
-        'email': 'csrf@example.com',
+        'username': 'csrfok',
         'password': 'password123',
         'confirm_password': 'password123',
     })
@@ -57,7 +51,7 @@ def test_signup_with_csrf_token_succeeds(csrf_client, flask_app):
 
 def test_novel_gen_json_endpoint_is_csrf_exempt(csrf_client, user_factory):
     """scripts.js posts JSON without a CSRF token; the route exempts itself."""
-    user_factory(email='j@example.com', password='password123', verified=True)
+    user_factory(username='jsonuser', password='password123')
     # Log in using CSRF-protected form by pulling its token.
     resp = csrf_client.get('/login')
     import re as _re
@@ -65,7 +59,7 @@ def test_novel_gen_json_endpoint_is_csrf_exempt(csrf_client, user_factory):
                         resp.get_data(as_text=True)).group(1)
     csrf_client.post('/login', data={
         'csrf_token': token,
-        'email': 'j@example.com',
+        'username': 'jsonuser',
         'password': 'password123',
     })
 

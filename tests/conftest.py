@@ -76,10 +76,9 @@ def csrf_client(flask_app):
         flask_app.config['WTF_CSRF_ENABLED'] = False
 
 
-def make_user(flask_app, email='user@example.com', password='password123',
-               verified=True):
+def make_user(flask_app, username='testuser', password='password123'):
     with flask_app.app_context():
-        user = User(email=User.normalize_email(email), email_verified=verified)
+        user = User(username=User.normalize_username(username))
         user.set_password(password)
         db.session.add(user)
         db.session.commit()
@@ -88,12 +87,14 @@ def make_user(flask_app, email='user@example.com', password='password123',
 
 @pytest.fixture
 def user_factory(flask_app):
-    def _make(email='user@example.com', password='password123', verified=True):
-        return make_user(flask_app, email=email, password=password,
-                          verified=verified)
+    def _make(username='testuser', password='password123'):
+        return make_user(flask_app, username=username, password=password)
     return _make
 
 
-def login(client, email, password):
-    return client.post('/login', data={'email': email, 'password': password},
-                        follow_redirects=False)
+def login(client, username, password):
+    return client.post(
+        '/login',
+        data={'username': username, 'password': password},
+        follow_redirects=False,
+    )

@@ -32,19 +32,14 @@ def test_reset_progress_clears_previous_run():
     assert d2['complete'] is False
 
 
-def test_progress_endpoint_does_not_leak_full_text(client, user_factory):
-    user_factory(email='p@example.com', password='password123', verified=True)
-    client.post('/login', data={'email': 'p@example.com',
+def test_progress_endpoint_does_not_leak_full_text(client, user_factory, flask_app):
+    user_factory(username='progressp', password='password123')
+    client.post('/login', data={'username': 'progressp',
                                  'password': 'password123'})
 
-    from app import app as flask_app
-    with flask_app.app_context():
-        from flask_login import current_user  # noqa: F401
-    # Populate the user's progress dict manually.
     from models.user import User
-    from models import db
     with flask_app.app_context():
-        user = User.query.filter_by(email='p@example.com').first()
+        user = User.query.filter_by(username='progressp').first()
         routes._reset_progress_dict(user.id)['text'] = 'SECRET NOVEL TEXT'
 
     resp = client.get('/progress')
@@ -55,20 +50,20 @@ def test_progress_endpoint_does_not_leak_full_text(client, user_factory):
 
 
 def test_two_users_have_independent_progress(flask_app, user_factory):
-    user_factory(email='u1@example.com', password='password123')
-    user_factory(email='u2@example.com', password='password123')
+    user_factory(username='progressu1', password='password123')
+    user_factory(username='progressu2', password='password123')
 
     c1 = flask_app.test_client()
     c2 = flask_app.test_client()
-    c1.post('/login', data={'email': 'u1@example.com',
+    c1.post('/login', data={'username': 'progressu1',
                              'password': 'password123'})
-    c2.post('/login', data={'email': 'u2@example.com',
+    c2.post('/login', data={'username': 'progressu2',
                              'password': 'password123'})
 
     from models.user import User
     with flask_app.app_context():
-        u1_id = User.query.filter_by(email='u1@example.com').first().id
-        u2_id = User.query.filter_by(email='u2@example.com').first().id
+        u1_id = User.query.filter_by(username='progressu1').first().id
+        u2_id = User.query.filter_by(username='progressu2').first().id
 
     routes._reset_progress_dict(u1_id)['current'] = 1
     routes._reset_progress_dict(u2_id)['current'] = 999

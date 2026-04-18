@@ -4,7 +4,7 @@ import threading
 from flask import request, jsonify, send_from_directory, send_file
 from flask_login import current_user, login_required
 
-from controllers.auth import verified_required, register_rate_limits
+from controllers.auth import register_rate_limits
 from models.story_pdf import StoryPDF
 
 from features.story_creator_v0 import StoryCreator as SC0
@@ -58,12 +58,11 @@ def configure_routes(app, csrf=None, limiter=None):
     @login_required
     def api_me():
         return jsonify({
-            'email': current_user.email,
-            'email_verified': current_user.email_verified,
+            'username': current_user.username,
         })
 
     @app.route('/novel-gen', methods=['POST'])
-    @verified_required
+    @login_required
     def submit_book_writer_form():
         progress_data = _reset_progress_dict(current_user.id)
 
@@ -91,7 +90,7 @@ def configure_routes(app, csrf=None, limiter=None):
         return jsonify({'message': 'Processing started successfully'}), 200
 
     @app.route('/progress')
-    @verified_required
+    @login_required
     def progress():
         progress_data = _get_progress_dict(current_user.id)
         snapshot = dict(progress_data)
@@ -100,7 +99,7 @@ def configure_routes(app, csrf=None, limiter=None):
         return jsonify(snapshot)
 
     @app.route('/create-pdf', methods=['POST'])
-    @verified_required
+    @login_required
     def pdf_route():
         data = request.json
 
