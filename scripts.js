@@ -1,6 +1,27 @@
 let wordList = [];
 
+function loadCurrentUser() {
+    fetch('/api/me', { credentials: 'same-origin' })
+        .then(function (response) {
+            if (response.status === 401) {
+                window.location.href = '/login';
+                return null;
+            }
+            return response.ok ? response.json() : null;
+        })
+        .then(function (data) {
+            if (!data) return;
+            $('#user-email').text(data.email);
+            $('#logout-link').show();
+            if (!data.email_verified) {
+                window.location.href = '/verify-notice';
+            }
+        })
+        .catch(function (err) { console.error('Failed to load user:', err); });
+}
+
 $(document).ready(function () {
+    loadCurrentUser();
     loadUserData();
 
     $('#save-api-key-btn').click(function (e) {
@@ -10,23 +31,6 @@ $(document).ready(function () {
 
         saveUserData();
     });
-
-    $('#novel-gen-tab').click(function (e) {
-        e.preventDefault();
-        $('#novel-gen').show();
-        $('#api-key').hide();
-        $(this).addClass('active');
-    });
-
-    $('#api-key-btn').click(function (e) {
-        e.preventDefault();
-        $('#novel-gen').hide();
-        $('#api-key').show();
-        $('#novel-gen-tab').removeClass('active');
-    });
-
-    $('#novel-gen').hide();
-    $('#api-key').show();
 
     $('#addInputBtn').click(function () {
         addInputField();

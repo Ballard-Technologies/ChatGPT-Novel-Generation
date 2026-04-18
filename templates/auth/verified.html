@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Email verification{% endblock %}
+{% block content %}
+{% if ok %}
+<h1 class="h4 mb-3">Email verified</h1>
+<p>Your email has been confirmed.</p>
+<p><a href="{{ url_for('index') }}" class="submit-button">Continue to app</a></p>
+{% else %}
+<h1 class="h4 mb-3">Verification link invalid</h1>
+<p>This link is invalid or has expired. Log in and request a new one.</p>
+<p><a href="{{ url_for('auth.login') }}">Log in</a></p>
+{% endif %}
+{% endblock %}

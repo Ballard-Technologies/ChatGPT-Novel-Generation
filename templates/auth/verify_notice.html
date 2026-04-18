@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Confirm your email{% endblock %}
+{% block content %}
+<h1 class="h4 mb-3">Confirm your email</h1>
+<p>We sent a confirmation link to <b>{{ email }}</b>. Open it to activate your account.</p>
+<p>Didn't get the email? Check spam, or resend below.</p>
+<form method="post" action="{{ url_for('auth.resend_verification') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="other-button">Resend verification email</button>
+</form>
+<p class="mt-3"><a href="{{ url_for('auth.logout') }}">Log out</a></p>
+{% endblock %}
