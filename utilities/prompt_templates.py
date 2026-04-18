@@ -77,3 +77,161 @@ summary_template_v0030 = {
 
     "write_chapter": "Novel Framework: {novel_framework}\nChapter Description: {detailed_chapter}\nPlease continue writing this story until the natural end of the chapter. In your writing, please:\n- Craft sentences carefully, paying close attention to language that reflects the characters, settings, and themes.\n- Use sentence structures that create the desired impact, focusing on clarity, tension, or atmosphere as appropriate.\n- Employ free indirect style where suitable to blend third-person narration with characters' internal thoughts, providing deeper emotional insight.\n- Include telling details to bring scenes and characters to life, focusing on small but significant aspects.\n- Reveal characters through their actions and dialogue, allowing their personalities to emerge naturally.\n- Develop main characters as complex and evolving (round characters), while utilizing simpler (flat) characters where appropriate.\n- Create narrative tension by introducing conflicts or moral dilemmas, balancing plot progression with character development.\n- Control the pacing of the story, knowing when to slow down for detail or speed up to build tension.\n- Be concise and cut unnecessary words to keep the narrative tight and focused.\n- Allow themes to emerge organically from the plot and characters, exploring fundamental human experiences or questions.\nWhen the end of the chapter is reached, please write the special characters ^^^.\nPrevious section: {previous_section}"
 }
+
+
+# ---------------------------------------------------------------------------
+# Public registry used by the settings UI and the /api/prompt-settings endpoint
+#
+# ``PROMPT_TEMPLATE_REGISTRY`` describes every editable template grouped by
+# the generation version that uses it. ``keys`` is the ordered list of slots
+# inside that template (either list indices as strings, or dict keys).
+# ---------------------------------------------------------------------------
+
+PROMPT_TEMPLATE_REGISTRY = [
+    {
+        'version': 'v0',
+        'label': 'v0 \u2013 Sequential single-pass pipeline',
+        'templates': [
+            {
+                'name': 'outline_template_v0010',
+                'label': 'Outline pipeline',
+                'kind': 'list',
+                'keys': ['0', '1', '2'],
+                'key_labels': {
+                    '0': 'Expand outline segment',
+                    '1': 'Write narrative from outline',
+                    '2': 'Revise rough draft',
+                },
+            },
+            {
+                'name': 'summary_template_v0002',
+                'label': 'Summary pipeline',
+                'kind': 'list',
+                'keys': ['0', '1', '2', '3'],
+                'key_labels': {
+                    '0': 'Expand summary',
+                    '1': 'Divide into 24 chapters',
+                    '2': 'Develop chapter part',
+                    '3': 'Enhance section cohesion',
+                },
+            },
+        ],
+    },
+    {
+        'version': 'v1',
+        'label': 'v1 \u2013 Author/character/theme context',
+        'templates': [
+            {
+                'name': 'summary_template_v0020',
+                'label': 'Summary pipeline',
+                'kind': 'dict',
+                'keys': [
+                    'create_summary',
+                    'create_summary_from_scratch',
+                    'create_author',
+                    'create_characters',
+                    'create_themes_and_conflicts',
+                    'create_chapters',
+                    'create_chapter',
+                    'write_first_chapter',
+                    'write_chapter',
+                ],
+            },
+        ],
+    },
+    {
+        'version': 'v2',
+        'label': 'v2 \u2013 Novel framework planning (recommended)',
+        'templates': [
+            {
+                'name': 'summary_template_v0030',
+                'label': 'Summary pipeline',
+                'kind': 'dict',
+                'keys': [
+                    'create_summary',
+                    'create_summary_from_scratch',
+                    'create_author',
+                    'create_characters',
+                    'create_themes_and_conflicts',
+                    'create_novel_framework',
+                    'create_chapters',
+                    'create_chapter',
+                    'write_first_chapter',
+                    'write_chapter',
+                ],
+            },
+        ],
+    },
+]
+
+
+_TEMPLATES_BY_NAME = {
+    'outline_template_v0010': outline_template_v0010,
+    'summary_template_v0001': summary_template_v0001,
+    'summary_template_v0002': summary_template_v0002,
+    'summary_template_v0010': summary_template_v0010,
+    'summary_template_v0020': summary_template_v0020,
+    'summary_template_v0030': summary_template_v0030,
+}
+
+
+def get_default_template(name):
+    """Return the module-level default template object for ``name``."""
+    return _TEMPLATES_BY_NAME[name]
+
+
+def get_default_prompts():
+    """Return a deep copy of the defaults for every registered template.
+
+    The returned structure mirrors what users store as their overrides: a
+    dict keyed by template name whose values are either a list of strings
+    (for list templates) or a dict of name -> string (for dict templates).
+    List templates are serialised as dicts keyed by stringified indices so
+    the JSON roundtrip is lossless.
+    """
+    result = {}
+    for group in PROMPT_TEMPLATE_REGISTRY:
+        for tpl in group['templates']:
+            default = _TEMPLATES_BY_NAME[tpl['name']]
+            if tpl['kind'] == 'list':
+                result[tpl['name']] = {
+                    k: default[int(k)] for k in tpl['keys']
+                }
+            else:
+                result[tpl['name']] = {k: default[k] for k in tpl['keys']}
+    return result
+
+
+def resolve_template(name, overrides):
+    """Return the template for ``name`` honouring any overrides.
+
+    ``overrides`` is the dict persisted on ``User.prompt_settings_json``.
+    Missing keys silently fall back to the module defaults so partial
+    overrides are valid. The returned object has the same shape (list or
+    dict) as the module-level default for ``name``.
+    """
+    default = _TEMPLATES_BY_NAME[name]
+    if not overrides:
+        return default
+    override = overrides.get(name)
+    if not isinstance(override, dict):
+        return default
+
+    if isinstance(default, list):
+        merged = list(default)
+        for k, v in override.items():
+            if not isinstance(v, str):
+                continue
+            try:
+                idx = int(k)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= idx < len(merged):
+                merged[idx] = v
+        return merged
+
+    merged = dict(default)
+    for k, v in override.items():
+        if k in merged and isinstance(v, str):
+            merged[k] = v
+    return merged

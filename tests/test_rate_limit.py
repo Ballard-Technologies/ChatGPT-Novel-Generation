@@ -27,15 +27,15 @@ def test_signup_is_rate_limited(client):
     assert last_status == 429
 
 
-def test_novel_gen_is_rate_limited_per_user(client, user_factory):
+def test_create_job_is_rate_limited_per_user(client, user_factory):
     user_factory(username='ratelimit', password='password123')
     client.post('/login', data={'username': 'ratelimit',
                                  'password': 'password123'})
-    # /novel-gen is 10 per hour per authenticated user.
+    # POST /api/jobs is 10 per hour per authenticated user.
     last_status = None
     for _ in range(11):
-        resp = client.post('/novel-gen', json={
-            'title': 't', 'api_key': 'x', 'bulk_model': 'gpt-4o-mini',
+        resp = client.post('/api/jobs', json={
+            'title': 't', 'api_key': 'x', 'bulk_model': 'gpt-5.4-mini',
             'version': 'bogus',  # skips downstream work; returns 400 quickly
         })
         last_status = resp.status_code

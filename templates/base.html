@@ -23,11 +23,15 @@
                 <span class="brand-mark" aria-hidden="true"></span>
                 <span class="brand-name">ChatGPT Novel Generation</span>
             </div>
+            <div class="user-menu" style="margin-left:auto;display:flex;align-items:center;gap:12px;">
+                <a href="/settings" class="other-button settings-btn"
+                   title="Prompt settings" aria-label="Prompt settings">&#9881;</a>
+            </div>
         </div>
     </header>
 
     <main class="container app-main">
-        <div class="card-surface" style="max-width: 480px; margin: 0 auto;">
+        <div class="card-surface" style="max-width: {% block content_max_width %}480px{% endblock %}; margin: 0 auto;">
             {% with messages = get_flashed_messages(with_categories=true) %}
                 {% if messages %}
                     {% for category, message in messages %}

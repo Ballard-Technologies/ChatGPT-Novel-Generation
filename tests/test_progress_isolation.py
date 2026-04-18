@@ -1,96 +1,113 @@
-"""Regression tests: progress state must be isolated per user."""
-from controllers import routes
+"""Regression tests: job state must be isolated per requester."""
+from datetime import datetime, timedelta
+
+from models import db
+from models.job import (ANON_HEARTBEAT_TIMEOUT_SECONDS, Job, STATUS_CANCELLED,
+                        STATUS_QUEUED, STATUS_RUNNING)
 
 
-def test_progress_dicts_are_keyed_per_user():
-    routes._progress_by_user.clear()
-    a = routes._reset_progress_dict(1)
-    b = routes._reset_progress_dict(2)
-    assert a is not b
-
-    a['current'] = 42
-    b['current'] = 7
-
-    assert routes._get_progress_dict(1)['current'] == 42
-    assert routes._get_progress_dict(2)['current'] == 7
-
-
-def test_reset_progress_clears_previous_run():
-    routes._progress_by_user.clear()
-    d = routes._reset_progress_dict(99)
-    d['current'] = 50
-    d['text'] = 'stale output'
-    d['fail'] = True
-    d['fail_message'] = 'boom'
-
-    d2 = routes._reset_progress_dict(99)
-    assert d2 is d  # same dict object, cleared in place
-    assert 'current' not in d2
-    assert 'text' not in d2
-    assert d2['fail'] is False
-    assert d2['fail_message'] == ''
-    assert d2['complete'] is False
-
-
-def test_progress_endpoint_does_not_leak_full_text(client, user_factory, flask_app):
-    user_factory(username='progressp', password='password123')
-    client.post('/login', data={'username': 'progressp',
-                                 'password': 'password123'})
-
-    from models.user import User
+def _seed_job(flask_app, **fields):
     with flask_app.app_context():
-        user = User.query.filter_by(username='progressp').first()
-        routes._reset_progress_dict(f'u:{user.id}')['text'] = 'SECRET NOVEL TEXT'
+        defaults = dict(status=STATUS_QUEUED, version='v2', model='m',
+                        title='t', summary='s', api_key='k')
+        defaults.update(fields)
+        job = Job(**defaults)
+        db.session.add(job)
+        db.session.commit()
+        return job.id
 
-    resp = client.get('/progress')
+
+def test_logged_in_users_cannot_read_each_others_jobs(flask_app, user_factory):
+    uid1 = user_factory(username='owner1', password='password123')
+    uid2 = user_factory(username='owner2', password='password123')
+    job_id = _seed_job(flask_app, user_id=uid1)
+
+    c1 = flask_app.test_client()
+    c2 = flask_app.test_client()
+    c1.post('/login', data={'username': 'owner1', 'password': 'password123'})
+    c2.post('/login', data={'username': 'owner2', 'password': 'password123'})
+
+    assert c1.get(f'/api/jobs/{job_id}').status_code == 200
+    # The other user must not even learn the job exists.
+    assert c2.get(f'/api/jobs/{job_id}').status_code == 404
+
+
+def test_anonymous_cannot_read_logged_in_job(flask_app, user_factory):
+    uid = user_factory(username='owner3', password='password123')
+    job_id = _seed_job(flask_app, user_id=uid)
+    anon = flask_app.test_client()
+    assert anon.get(f'/api/jobs/{job_id}').status_code == 404
+
+
+def test_two_anonymous_clients_cannot_see_each_others_jobs(flask_app):
+    c1 = flask_app.test_client()
+    c2 = flask_app.test_client()
+    # Pre-seed c1's session directly so the GET below has an anon_id
+    # without relying on validation-passing POST side effects.
+    with c1.session_transaction() as s:
+        s['anon_id'] = 'anon-c1'
+
+    job_id = _seed_job(flask_app, user_id=None, anon_session_id='anon-c1')
+
+    assert c1.get(f'/api/jobs/{job_id}').status_code == 200
+    # c2 has no anon_id at all, so the owner check must reject it.
+    assert c2.get(f'/api/jobs/{job_id}').status_code == 404
+
+
+def test_cancel_endpoint_marks_job_cancelled(flask_app, user_factory):
+    uid = user_factory(username='canceller', password='password123')
+    job_id = _seed_job(flask_app, user_id=uid, status=STATUS_RUNNING)
+
+    c = flask_app.test_client()
+    c.post('/login', data={'username': 'canceller',
+                           'password': 'password123'})
+    resp = c.post(f'/api/jobs/{job_id}/cancel')
     assert resp.status_code == 200
-    body = resp.get_json()
-    assert body.get('text') == ''
-    assert b'SECRET NOVEL TEXT' not in resp.data
+    assert resp.get_json()['status'] == STATUS_CANCELLED
 
-
-def test_two_users_have_independent_progress(flask_app, user_factory):
-    user_factory(username='progressu1', password='password123')
-    user_factory(username='progressu2', password='password123')
-
-    c1 = flask_app.test_client()
-    c2 = flask_app.test_client()
-    c1.post('/login', data={'username': 'progressu1',
-                             'password': 'password123'})
-    c2.post('/login', data={'username': 'progressu2',
-                             'password': 'password123'})
-
-    from models.user import User
     with flask_app.app_context():
-        u1_id = User.query.filter_by(username='progressu1').first().id
-        u2_id = User.query.filter_by(username='progressu2').first().id
-
-    routes._reset_progress_dict(f'u:{u1_id}')['current'] = 1
-    routes._reset_progress_dict(f'u:{u2_id}')['current'] = 999
-
-    r1 = c1.get('/progress').get_json()
-    r2 = c2.get('/progress').get_json()
-    assert r1['current'] == 1
-    assert r2['current'] == 999
+        assert db.session.get(Job, job_id).status == STATUS_CANCELLED
 
 
-def test_two_anonymous_clients_have_independent_progress(flask_app):
-    """Anonymous browsers get per-session progress via the Flask session."""
-    c1 = flask_app.test_client()
-    c2 = flask_app.test_client()
+def test_anon_heartbeat_timeout_triggers_cancellation_on_check(flask_app):
+    """check_cancel() cancels anon jobs whose last_heartbeat is stale."""
+    from features.progress_store import JobCancelled, JobProgressStore
 
-    # First request establishes each client's anonymous session id.
-    c1.get('/progress')
-    c2.get('/progress')
+    stale = datetime.utcnow() - timedelta(
+        seconds=ANON_HEARTBEAT_TIMEOUT_SECONDS + 5)
+    job_id = _seed_job(flask_app, user_id=None, anon_session_id='anon-stale',
+                       status=STATUS_RUNNING, last_heartbeat=stale)
 
-    with c1.session_transaction() as s1:
-        anon1 = s1['anon_id']
-    with c2.session_transaction() as s2:
-        anon2 = s2['anon_id']
-    assert anon1 != anon2
+    with flask_app.app_context():
+        store = JobProgressStore(job_id)
+        try:
+            store.check_cancel()
+        except JobCancelled:
+            pass
+        else:
+            raise AssertionError('expected JobCancelled to be raised')
+        assert db.session.get(Job, job_id).status == STATUS_CANCELLED
 
-    routes._reset_progress_dict(f'a:{anon1}')['current'] = 11
-    routes._reset_progress_dict(f'a:{anon2}')['current'] = 22
 
-    assert c1.get('/progress').get_json()['current'] == 11
-    assert c2.get('/progress').get_json()['current'] == 22
+def test_pdf_endpoint_requires_completed_job(flask_app, user_factory):
+    uid = user_factory(username='pdfuser', password='password123')
+    job_id = _seed_job(flask_app, user_id=uid, status=STATUS_RUNNING)
+
+    c = flask_app.test_client()
+    c.post('/login', data={'username': 'pdfuser', 'password': 'password123'})
+    resp = c.get(f'/api/jobs/{job_id}/pdf')
+    assert resp.status_code == 409
+    assert resp.get_json()['status'] == STATUS_RUNNING
+
+
+def test_one_active_job_per_user(flask_app, user_factory):
+    uid = user_factory(username='onejob', password='password123')
+    _seed_job(flask_app, user_id=uid, status=STATUS_RUNNING)
+
+    c = flask_app.test_client()
+    c.post('/login', data={'username': 'onejob', 'password': 'password123'})
+    resp = c.post('/api/jobs', json={
+        'title': 'another', 'api_key': 'x', 'bulk_model': 'm',
+        'version': 'v2', 'summary': 'hello',
+    })
+    assert resp.status_code == 409

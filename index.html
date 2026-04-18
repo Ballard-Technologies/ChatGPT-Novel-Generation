@@ -30,6 +30,8 @@
             </div>
             <div class="user-menu" id="user-menu" style="margin-left:auto;display:flex;align-items:center;gap:12px;">
                 <span id="user-username" class="text-muted"></span>
+                <a href="/settings" class="other-button settings-btn" id="settings-link"
+                   title="Prompt settings" aria-label="Prompt settings">&#9881;</a>
                 <a href="/login" class="other-button" id="login-link" style="display:none;">Log in</a>
                 <a href="/signup" class="other-button" id="signup-link" style="display:none;">Sign up</a>
                 <a href="/logout" class="other-button" id="logout-link" style="display:none;">Log out</a>
@@ -75,8 +77,17 @@
                     <div class="field">
                         <label class="inputLabel" for="bulk-model">Bulk Processing Model</label>
                         <select id="bulk-model" name="bulk-model">
-                            <option value="gpt-4o">gpt-4o</option>
-                            <option value="gpt-4o-mini" selected>gpt-4o-mini</option>
+                            <optgroup label="Larger models">
+                                <option value="gpt-5.4">gpt-5.4</option>
+                                <option value="gpt-5">gpt-5</option>
+                                <option value="gpt-4.1">gpt-4.1</option>
+                            </optgroup>
+                            <optgroup label="Smaller models">
+                                <option value="gpt-5.4-mini" selected>gpt-5.4-mini</option>
+                                <option value="gpt-5.4-nano">gpt-5.4-nano</option>
+                                <option value="gpt-5-mini">gpt-5-mini</option>
+                                <option value="gpt-4.1-mini">gpt-4.1-mini</option>
+                            </optgroup>
                         </select>
                     </div>
                 </div>

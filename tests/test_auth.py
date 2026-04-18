@@ -156,12 +156,12 @@ def test_removed_routes_no_longer_exist(client):
         assert resp.status_code == 404, path
 
 
-def test_novel_gen_works_when_logged_in(client, user_factory):
-    """Logged-in users can reach /novel-gen."""
+def test_create_job_works_when_logged_in(client, user_factory):
+    """Logged-in users can reach POST /api/jobs."""
     user_factory(username='dave', password='password123')
     client.post('/login', data={'username': 'dave',
                                  'password': 'password123'})
-    resp = client.post('/novel-gen', json={
+    resp = client.post('/api/jobs', json={
         'title': 't', 'api_key': 'x', 'bulk_model': 'm',
         'version': 'bogus',
     })
@@ -170,9 +170,9 @@ def test_novel_gen_works_when_logged_in(client, user_factory):
     assert b'format not specified' in resp.data
 
 
-def test_novel_gen_works_for_anonymous_users(client):
-    """Auth is optional: anonymous visitors can also reach /novel-gen."""
-    resp = client.post('/novel-gen', json={
+def test_create_job_works_for_anonymous_users(client):
+    """Auth is optional: anonymous visitors can also POST /api/jobs."""
+    resp = client.post('/api/jobs', json={
         'title': 't', 'api_key': 'x', 'bulk_model': 'm',
         'version': 'bogus',
     })
@@ -185,9 +185,9 @@ def test_index_is_public(client):
     assert resp.status_code == 200
 
 
-def test_progress_is_public(client):
-    resp = client.get('/progress', follow_redirects=False)
-    assert resp.status_code == 200
+def test_get_unknown_job_returns_404(client):
+    resp = client.get('/api/jobs/does-not-exist')
+    assert resp.status_code == 404
 
 
 def test_api_me_returns_null_username_when_anonymous(client):
@@ -196,16 +196,39 @@ def test_api_me_returns_null_username_when_anonymous(client):
     assert resp.get_json()['username'] is None
 
 
-def test_create_pdf_persists_novel_for_logged_in_user(
-        client, user_factory, flask_app, monkeypatch, tmp_path):
-    user_factory(username='saver', password='password123')
-    client.post('/login', data={'username': 'saver',
-                                 'password': 'password123'})
-    _stub_story_pdf(monkeypatch, tmp_path)
+def _run_tasks_with_stubbed_story(monkeypatch, chapters):
+    """Make run_story_creator skip OpenAI by stubbing process_summary.
 
-    resp = client.post('/create-pdf',
-                       json={'title': 'MyBook', 'chapters': ['Ch1', 'Ch2']})
-    assert resp.status_code == 200
+    The stub marks progress complete with the supplied chapters, which is
+    exactly what the real method would do at the end of a successful run.
+    Returns nothing - callers invoke run_story_creator themselves.
+    """
+    from features import story_creator_v2 as sc2_mod
+
+    def _fake_process_summary(self, title, summary, chatgpt_model):
+        self.progress.start(total=1)
+        self.progress.complete(chapters=chapters)
+
+    monkeypatch.setattr(sc2_mod.StoryCreator, 'process_summary',
+                        _fake_process_summary)
+
+
+def test_run_story_creator_persists_novel_for_logged_in_user(
+        flask_app, user_factory, monkeypatch):
+    from features.tasks import run_story_creator
+    from models.job import Job, STATUS_QUEUED
+
+    _run_tasks_with_stubbed_story(monkeypatch, ['Ch1', 'Ch2'])
+
+    uid = user_factory(username='saver', password='password123')
+    with flask_app.app_context():
+        job = Job(user_id=uid, status=STATUS_QUEUED, version='v2',
+                  model='m', title='MyBook', summary='s', api_key='x')
+        db.session.add(job)
+        db.session.commit()
+        job_id = job.id
+
+    run_story_creator(job_id)
 
     with flask_app.app_context():
         novels = Novel.query.all()
@@ -214,13 +237,22 @@ def test_create_pdf_persists_novel_for_logged_in_user(
         assert novels[0].chapters == ['Ch1', 'Ch2']
 
 
-def test_create_pdf_does_not_persist_for_anonymous(
-        client, flask_app, monkeypatch, tmp_path):
-    _stub_story_pdf(monkeypatch, tmp_path)
+def test_run_story_creator_does_not_persist_novel_for_anonymous(
+        flask_app, monkeypatch):
+    from features.tasks import run_story_creator
+    from models.job import Job, STATUS_QUEUED
 
-    resp = client.post('/create-pdf',
-                       json={'title': 'MyBook', 'chapters': ['Ch1']})
-    assert resp.status_code == 200
+    _run_tasks_with_stubbed_story(monkeypatch, ['Ch1'])
+
+    with flask_app.app_context():
+        job = Job(user_id=None, anon_session_id='anon-abc',
+                  status=STATUS_QUEUED, version='v2', model='m',
+                  title='MyBook', summary='s', api_key='x')
+        db.session.add(job)
+        db.session.commit()
+        job_id = job.id
+
+    run_story_creator(job_id)
 
     with flask_app.app_context():
         assert Novel.query.count() == 0

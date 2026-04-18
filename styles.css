@@ -10,8 +10,8 @@
     --border: rgba(255, 255, 255, 0.08);
     --border-strong: rgba(255, 255, 255, 0.14);
     --text: #f5f5f5;
-    --text-muted: #a1a1a6;
-    --text-dim: #6e6e73;
+    --text-muted: #b8b8bf;
+    --text-dim: #8e8e93;
     --accent: #ffffff;
     --accent-contrast: #0a0a0a;
     --danger: #ff6b6b;
@@ -122,6 +122,20 @@ body {
     display: inline-flex;
     align-items: center;
     gap: 8px;
+}
+
+.user-menu {
+    font-size: 13px;
+}
+
+#user-username {
+    color: var(--text);
+    font-weight: 500;
+}
+
+/* Override Bootstrap's .text-muted so it stays legible on dark surfaces */
+.text-muted {
+    color: var(--text-muted) !important;
 }
 
 .icon {
@@ -681,4 +695,138 @@ button:focus-visible {
     font-size: 12px;
     color: var(--text-muted);
     margin-top: 2px;
+}
+
+/* =========================================================
+   Settings (gear button + prompt settings page)
+   ========================================================= */
+.settings-btn {
+    padding: 6px 10px;
+    font-size: 16px;
+    line-height: 1;
+    min-width: 36px;
+    text-align: center;
+    text-decoration: none;
+}
+
+.settings-header {
+    margin-bottom: 20px;
+}
+
+.settings-intro {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.55;
+}
+
+.settings-intro code {
+    background-color: var(--surface-2);
+    color: var(--text);
+    padding: 1px 6px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    font-size: 12px;
+}
+
+.settings-group {
+    margin-top: 24px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border);
+}
+
+.settings-group:first-of-type {
+    margin-top: 12px;
+    padding-top: 0;
+    border-top: none;
+}
+
+.settings-group-title {
+    margin: 0 0 12px;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.settings-template {
+    margin-bottom: 16px;
+    padding: 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background-color: var(--surface-2);
+}
+
+.settings-template-title {
+    margin: 0 0 10px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.settings-template-name {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: var(--text-dim);
+    font-weight: 400;
+}
+
+.settings-field {
+    margin-bottom: 14px;
+}
+
+.settings-field:last-child {
+    margin-bottom: 0;
+}
+
+.settings-field .inputLabel {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.settings-modified {
+    font-size: 11px;
+    color: var(--accent-contrast);
+    background-color: var(--accent);
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+.settings-textarea {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    min-height: 120px;
+}
+
+.settings-reset-btn {
+    margin-top: 6px;
+    font-size: 12px;
+    padding: 6px 10px;
+}
+
+.settings-actions {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 10px;
+    margin-top: 24px;
+    flex-wrap: wrap;
+}
+
+.settings-status {
+    margin-top: 10px;
+    font-size: 13px;
+    color: var(--text-muted);
+    min-height: 20px;
+    text-align: right;
+}
+
+.settings-status-error {
+    color: var(--danger);
 }

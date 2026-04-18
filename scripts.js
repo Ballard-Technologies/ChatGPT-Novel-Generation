@@ -13,6 +13,17 @@ const VERSION_DESCRIPTIONS = {
     v2: 'Extends v1 with an extra novel-framework planning step, chapter numbering, and refined prompts at lower temperature for the most consistent output. Recommended.'
 };
 
+// Tracks whether the current visitor is authenticated. Determines whether we
+// install the sendBeacon cancel-on-unload path (anonymous) or stash the job
+// id in localStorage for refresh-resume (logged-in).
+let isAuthenticated = false;
+// Currently-tracked job id (null when nothing is in flight).
+let activeJobId = null;
+// Handle for the setTimeout that drives the polling loop.
+let pollTimer = null;
+
+const ACTIVE_JOB_STORAGE_KEY = 'activeJob-v1';
+
 function loadCurrentUser() {
     fetch('/api/me', { credentials: 'same-origin' })
         .then(function (response) {
@@ -20,17 +31,23 @@ function loadCurrentUser() {
         })
         .then(function (data) {
             if (data && data.username) {
+                isAuthenticated = true;
                 $('#user-username').text(data.username);
                 $('#logout-link').show();
                 $('#login-link').hide();
                 $('#signup-link').hide();
                 loadMyNovels();
+                resumeActiveJobIfAny();
             } else {
+                isAuthenticated = false;
                 $('#user-username').text('');
                 $('#logout-link').hide();
                 $('#login-link').show();
                 $('#signup-link').show();
                 $('#my-novels').hide();
+                // Anonymous visitors never resume after a refresh; clear any
+                // stale entry (e.g. left over after logout).
+                try { localStorage.removeItem(ACTIVE_JOB_STORAGE_KEY); } catch (e) {}
             }
         })
         .catch(function (err) { console.error('Failed to load user:', err); });
@@ -102,7 +119,7 @@ $(document).ready(function () {
             return; // Stop the function if validation fails
         }
 
-        prefix = 'novel-gen'
+        const prefix = 'novel-gen';
 
         // Show the loading bar
         $('#' + prefix + '-loading-bar-container').show();
@@ -114,35 +131,31 @@ $(document).ready(function () {
         formData["api_key"] = $("#api-key-input").val();
 
         // Capture the selected output style at submit time so it's used
-        // by the subsequent /create-pdf request regardless of later UI changes.
-        let selectedStyle = $('#novel-gen-style').val();
+        // by the subsequent PDF download regardless of later UI changes.
+        const selectedStyle = $('#novel-gen-style').val();
 
-        $.ajax({
-            type: "POST",
-            url: "/novel-gen",
-            contentType: "application/json",
-            data: JSON.stringify(formData),
-            xhr: function () {
-                var xhr = new window.XMLHttpRequest();
-                xhr.upload.addEventListener("progress", function (evt) {
-                    if (evt.lengthComputable) {
-                        var percentComplete = evt.loaded / evt.total;
-                        // Update loading bar width
-                        $('#' + prefix + '-loading-bar').css('width', percentComplete * 100 + '%');
-                    }
-                }, false);
-                return xhr;
-            },
-            success: function (response) {
-                console.log("Data submitted successfully:", response);
-            },
-            error: function (xhr, status, error) {
-                console.error("Error in data submission:", xhr.responseText);
-            },
-            complete: function () {
-                // Hide the loading bar when the request is complete
-                updateLoadingBar(formData.title, prefix, selectedStyle);
+        fetch('/api/jobs', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(formData),
+        }).then(function (response) {
+            return response.json().then(function (body) {
+                return { ok: response.ok, status: response.status, body: body };
+            });
+        }).then(function (result) {
+            if (!result.ok) {
+                $('#' + prefix + '-loading-bar-container').hide();
+                const msg = (result.body && result.body.error) || 'Failed to start job.';
+                $('#novel-gen-error').text(msg);
+                return;
             }
+            const jobId = result.body.job_id;
+            startJobTracking(jobId, formData.title, selectedStyle, prefix);
+        }).catch(function (err) {
+            console.error('Error submitting job:', err);
+            $('#' + prefix + '-loading-bar-container').hide();
+            $('#novel-gen-error').text('Network error submitting job.');
         });
     });
 
@@ -343,7 +356,7 @@ async function testOpenAIKey() {
     };
 
     const body = JSON.stringify({
-        model: "gpt-4o-mini",
+        model: "gpt-5.4-nano",
         messages: [
             {
                 role: "system",
@@ -370,84 +383,171 @@ async function testOpenAIKey() {
     }
 }
 
-// Function to periodically fetch progress and update the loading bar
-function updateLoadingBar(title, prefix, style) {
-    $.get('/progress', function (data) {
-        if (data.fail) {
-            $('#' + prefix + '-loading-bar-container').hide();
-            $('#novel-gen-error').text('Error occurred on the server. Unable to create novel.' + data.fail_message);
-            return -1
-        }
-        if (data.current && data.total) {
-            var progress = (data.current / data.total) * 100;
-            $('#' + prefix + '-loading-bar').css('width', progress + '%');
-            $('#' + prefix + '-loading-percent').text(Math.round(progress) + '%'); // Update the text
-        }
+// ---- Job tracking: polling, unload handlers, PDF delivery ----
 
-        if (data.complete) {
-            deliverPDF(data.chapters, title, style);
+function startJobTracking(jobId, title, style, prefix) {
+    activeJobId = jobId;
+    // Logged-in users can reload the tab and resume where they left off;
+    // anonymous users are cancelled on unload, so there's nothing to stash.
+    if (isAuthenticated) {
+        try {
+            localStorage.setItem(ACTIVE_JOB_STORAGE_KEY, JSON.stringify({
+                job_id: jobId, title: title, style: style, prefix: prefix,
+            }));
+        } catch (e) { /* storage disabled; not fatal */ }
+    }
+    installUnloadHandlers();
+    pollJob(jobId, title, style, prefix);
+}
+
+function finishJobTracking() {
+    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+    activeJobId = null;
+    try { localStorage.removeItem(ACTIVE_JOB_STORAGE_KEY); } catch (e) {}
+    removeUnloadHandlers();
+}
+
+function resumeActiveJobIfAny() {
+    // Only logged-in users persist job state across reloads.
+    if (!isAuthenticated) { return; }
+    let stashed;
+    try { stashed = JSON.parse(localStorage.getItem(ACTIVE_JOB_STORAGE_KEY)); }
+    catch (e) { stashed = null; }
+    if (!stashed || !stashed.job_id) { return; }
+    // Verify the job still exists (and belongs to us) before showing the bar.
+    fetch('/api/jobs/' + encodeURIComponent(stashed.job_id), {
+        credentials: 'same-origin',
+    }).then(function (r) {
+        if (!r.ok) { localStorage.removeItem(ACTIVE_JOB_STORAGE_KEY); return null; }
+        return r.json();
+    }).then(function (data) {
+        if (!data) { return; }
+        const prefix = stashed.prefix || 'novel-gen';
+        if (data.status === 'complete' || data.status === 'failed'
+            || data.status === 'cancelled') {
+            // Terminal already; drop the stash silently.
+            localStorage.removeItem(ACTIVE_JOB_STORAGE_KEY);
+            return;
+        }
+        $('#' + prefix + '-loading-bar-container').show();
+        startJobTracking(stashed.job_id, stashed.title, stashed.style, prefix);
+    }).catch(function () { /* network blip; next reload will retry */ });
+}
+
+function pollJob(jobId, title, style, prefix) {
+    fetch('/api/jobs/' + encodeURIComponent(jobId), {
+        credentials: 'same-origin',
+    }).then(function (response) {
+        if (!response.ok) {
+            throw new Error('Job lookup failed: ' + response.status);
+        }
+        return response.json();
+    }).then(function (data) {
+        if (data.current && data.total) {
+            const progress = (data.current / data.total) * 100;
+            $('#' + prefix + '-loading-bar').css('width', progress + '%');
+            $('#' + prefix + '-loading-percent').text(Math.round(progress) + '%');
+        }
+        if (data.status === 'failed') {
             $('#' + prefix + '-loading-bar-container').hide();
+            $('#novel-gen-error').text(
+                'Error occurred on the server. Unable to create novel. '
+                + (data.fail_message || ''));
+            finishJobTracking();
+            return;
         }
-        else {
-            setTimeout(() => updateLoadingBar(title, prefix, style), 10000); // Update every 10 seconds
+        if (data.status === 'cancelled') {
+            $('#' + prefix + '-loading-bar-container').hide();
+            $('#novel-gen-error').text('Job was cancelled.');
+            finishJobTracking();
+            return;
         }
+        if (data.status === 'complete') {
+            $('#' + prefix + '-loading-bar-container').hide();
+            deliverPDF(jobId, style);
+            finishJobTracking();
+            return;
+        }
+        pollTimer = setTimeout(function () {
+            pollJob(jobId, title, style, prefix);
+        }, 10000);
+    }).catch(function (err) {
+        console.error('Error polling job:', err);
+        // Don't finish tracking -- retry on the same schedule so a network
+        // blip doesn't silently abandon the run.
+        pollTimer = setTimeout(function () {
+            pollJob(jobId, title, style, prefix);
+        }, 10000);
     });
 }
 
-function deliverPDF(chapters, title, style) {
-    // Prepare the data to be sent in the request
-    const data = JSON.stringify({chapters: chapters, title: title, style: style});
-    console.log("Sending data:", data);
-
-    // Use the fetch API to send the POST request
-    fetch('/create-pdf', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: data
-    })
+function deliverPDF(jobId, style) {
+    const url = '/api/jobs/' + encodeURIComponent(jobId) + '/pdf'
+        + (style ? '?style=' + encodeURIComponent(style) : '');
+    fetch(url, { credentials: 'same-origin' })
     .then(response => {
-        // Check if the response is ok (status in the range 200-299)
         if (!response.ok) {
-            // Try to parse the error message from the response
             return response.json().then(errData => {
-                console.error("Server error message:", errData);
-                throw new Error(errData.message || 'Failed to create PDF');
+                throw new Error(errData.error || 'Failed to create PDF');
             });
         }
-        // Retrieve the filename from the Content-Disposition header
         const disposition = response.headers.get('Content-Disposition');
-
         let filename = 'download.pdf';
         if (disposition && disposition.indexOf('filename=') !== -1) {
             filename = disposition.split('filename=')[1].replace(/"/g, '');
         }
-
         return response.blob().then(blob => ({blob, filename}));
     })
     .then(({ blob, filename }) => {
-        console.log("Downloading file:", filename);
-        // Create a URL for the blob object
-        const url = window.URL.createObjectURL(blob);
-        // Create an anchor (<a>) element with the URL as the href
+        const objectUrl = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = url;
+        a.href = objectUrl;
         a.download = filename;
         document.body.appendChild(a);
         a.click();
-        window.URL.revokeObjectURL(url);
+        window.URL.revokeObjectURL(objectUrl);
         a.remove();
-        // Refresh the My Novels list so a freshly-persisted row shows up.
+        // Logged-in users now have a persisted Novel row; refresh the list.
         if ($('#my-novels').is(':visible')) {
             loadMyNovels();
         }
     })
     .catch(error => {
         console.error('Error creating PDF:', error);
-        // Display an error message to the user
         alert('An error occurred while creating the PDF: ' + error.message);
     });
+}
+
+// ---- Unload handling ----
+// Anonymous users see a beforeunload warning and have their job cancelled
+// via sendBeacon when they actually leave. Logged-in users' jobs survive
+// a refresh, so we skip both.
+
+function _beforeUnloadHandler(e) {
+    if (!activeJobId) { return; }
+    if (!isAuthenticated) {
+        e.preventDefault();
+        e.returnValue = '';
+        return '';
+    }
+}
+
+function _unloadHandler() {
+    if (!activeJobId || isAuthenticated) { return; }
+    try {
+        const url = '/api/jobs/' + encodeURIComponent(activeJobId) + '/cancel';
+        navigator.sendBeacon(url, new Blob([''], { type: 'application/json' }));
+    } catch (e) { /* best-effort */ }
+}
+
+function installUnloadHandlers() {
+    window.addEventListener('beforeunload', _beforeUnloadHandler);
+    window.addEventListener('pagehide', _unloadHandler);
+}
+
+function removeUnloadHandlers() {
+    window.removeEventListener('beforeunload', _beforeUnloadHandler);
+    window.removeEventListener('pagehide', _unloadHandler);
 }
 
 // Function to parse the CSV text into an array of objects

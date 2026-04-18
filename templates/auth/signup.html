@@ -1,7 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Sign up{% endblock %}
 {% block content %}
-<h1 class="h4 mb-3">Create an account</h1>
+<h1 class="h4 mb-2">Create an account</h1>
+<p class="text-muted mb-2">An account is optional, you can generate novels without one. Signing up adds:</p>
+<ul class="text-muted mb-3" style="padding-left:1.1rem;">
+    <li><b>Saved prompt settings.</b> Customize the prompts used at each step of generation and have your tweaks applied automatically every time you log in.</li>
+    <li><b>A library of your novels.</b> Every PDF you generate while logged in is kept on your account so you can find it later.</li>
+</ul>
 <form method="post" action="{{ url_for('auth.signup') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="field">

@@ -1,69 +1,62 @@
 import logging
-import threading
 import uuid
+from datetime import datetime
 
-from flask import abort, request, jsonify, send_from_directory, send_file, session
+from flask import (abort, request, jsonify, redirect, render_template,
+                   send_from_directory, send_file, session, url_for)
 from flask_limiter.util import get_remote_address
 from flask_login import current_user, login_required
 
 from controllers.auth import register_rate_limits
+from features import job_queue
+from features.tasks import run_story_creator
 from models import db
+from models.job import (ACTIVE_STATUSES, Job, STATUS_CANCELLED,
+                        STATUS_COMPLETE, STATUS_QUEUED)
 from models.novel import Novel, TITLE_MAX_LENGTH
 from models.story_pdf import StoryPDF
 
-from features.story_creator_v0 import StoryCreator as SC0
-from features.story_creator_v1 import StoryCreator as SC1
-from features.story_creator_v2 import StoryCreator as SC2
+from utilities import prompt_templates as pt
 
 logger = logging.getLogger(__name__)
 
-# Per-requester progress state. Keyed by a string that is either
-# ``u:<user_id>`` for logged-in users or ``a:<anon_session_id>`` for anonymous
-# browser sessions, so concurrent requesters do not overwrite each other's
-# progress. Each inner dict is only ever read/written by one requester's
-# request thread and that requester's background worker thread.
-_progress_by_user = {}
-_progress_lock = threading.Lock()
 
-
-def _current_requester_key():
-    """Return a stable key identifying the current requester.
-
-    Authenticated users get ``u:<id>``. Anonymous users get ``a:<uuid>``
-    stored in the Flask session so the same browser keeps the same key
-    across requests.
-    """
-    if current_user.is_authenticated:
-        return f'u:{current_user.id}'
+def _get_or_create_anon_id():
+    """Return the anonymous session id, minting one if needed."""
     anon_id = session.get('anon_id')
     if not anon_id:
         anon_id = uuid.uuid4().hex
         session['anon_id'] = anon_id
-    return f'a:{anon_id}'
+    return anon_id
 
 
-def _get_progress_dict(user_id):
-    with _progress_lock:
-        d = _progress_by_user.get(user_id)
-        if d is None:
-            d = {}
-            _progress_by_user[user_id] = d
-        return d
+def _require_job_owner(job_id):
+    """Look up a Job and enforce that the current requester owns it.
+
+    Returns the Job on success. Aborts 404 on any mismatch (including
+    when the job does not exist) so a stranger cannot probe job ids.
+    """
+    job = db.session.get(Job, job_id)
+    if job is None:
+        abort(404)
+    anon_id = session.get('anon_id')
+    if not job.is_owned_by(current_user, anon_id):
+        abort(404)
+    return job
 
 
-def _reset_progress_dict(user_id):
-    with _progress_lock:
-        d = _progress_by_user.get(user_id)
-        if d is None:
-            d = {}
-            _progress_by_user[user_id] = d
-        else:
-            d.clear()
-        d['complete'] = False
-        d['fail'] = False
-        d['fail_message'] = ''
-        d['meta_text'] = ''
-        return d
+def _job_status_payload(job):
+    """Shape the public view of a Job for /api/jobs/<id> responses."""
+    return {
+        'id': job.id,
+        'status': job.status,
+        'current': job.current,
+        'total': job.total,
+        'fail_message': job.fail_message or '',
+        'created_at': job.created_at.isoformat() + 'Z',
+        'completed_at': (job.completed_at.isoformat() + 'Z'
+                         if job.completed_at else None),
+    }
 
 
 def configure_routes(app, csrf=None, limiter=None):
@@ -81,75 +74,123 @@ def configure_routes(app, csrf=None, limiter=None):
             return jsonify({'username': current_user.username})
         return jsonify({'username': None})
 
-    @app.route('/novel-gen', methods=['POST'])
-    def submit_book_writer_form():
-        progress_data = _reset_progress_dict(_current_requester_key())
+    @app.route('/api/jobs', methods=['POST'])
+    def create_job():
+        data = request.get_json(silent=True) or {}
+        title = (data.get('title') or '').strip()
+        api_key = data.get('api_key') or ''
+        chatgpt_model = data.get('bulk_model') or ''
+        version = data.get('version') or 'v2'
+        summary = data.get('summary')
 
-        data = request.json
-        title = data['title']
-        api_key = data['api_key']
-        chatgpt_model = data['bulk_model']
-        version = data['version']
+        if not title:
+            return jsonify({'error': 'Title is required.'}), 400
+        if summary is None:
+            return jsonify({
+                'error': 'Type of format not specified. Expected summary.'
+            }), 400
+        if version not in ('v0', 'v1', 'v2'):
+            return jsonify({'error': 'Unknown version.'}), 400
 
-        if version == 'v0':
-            story_creator = SC0(progress_data=progress_data)
-        elif version == 'v1':
-            story_creator = SC1(progress_data=progress_data, api_key=api_key, testing=app.config.get('TESTING'))
-        elif version == 'v2':
-            story_creator = SC2(progress_data=progress_data, api_key=api_key, testing=app.config.get('TESTING'))
-        else:
-            story_creator = SC2(progress_data=progress_data, api_key=api_key, testing=app.config.get('TESTING'))
+        # Per-user concurrency cap: a single requester can only have one
+        # active job at a time. Returning 409 forces the client to cancel
+        # (or wait) rather than silently stacking OpenAI spend.
+        owner_filter = (Job.user_id == current_user.id
+                        if current_user.is_authenticated
+                        else Job.anon_session_id == _get_or_create_anon_id())
+        active = (Job.query
+                  .filter(owner_filter)
+                  .filter(Job.status.in_(ACTIVE_STATUSES))
+                  .first())
+        if active is not None:
+            return jsonify({
+                'error': 'You already have a job in progress.',
+                'job_id': active.id,
+            }), 409
 
-        if 'summary' in data:
-            summary_data = data['summary']
-            threading.Thread(target=story_creator.process_summary, args=(title, summary_data, chatgpt_model)).start()
-        else:
-            return jsonify({'message': 'Type of format not specified. Expected outline or summary.'}), 400
+        prompt_overrides = (
+            current_user.get_prompt_settings()
+            if current_user.is_authenticated else {}
+        )
 
-        return jsonify({'message': 'Processing started successfully'}), 200
+        job = Job(
+            user_id=(current_user.id if current_user.is_authenticated
+                     else None),
+            anon_session_id=(None if current_user.is_authenticated
+                             else _get_or_create_anon_id()),
+            status=STATUS_QUEUED,
+            version=version,
+            model=chatgpt_model,
+            title=title[:TITLE_MAX_LENGTH],
+            summary=summary,
+            api_key=api_key,
+        )
+        job.prompt_overrides = prompt_overrides
+        # Anonymous jobs are gated on a fresh heartbeat; seed it at
+        # creation so the worker doesn't immediately time them out.
+        if job.is_anonymous():
+            job.last_heartbeat = datetime.utcnow()
+        db.session.add(job)
+        db.session.commit()
 
-    @app.route('/progress')
-    def progress():
-        progress_data = _get_progress_dict(_current_requester_key())
-        snapshot = dict(progress_data)
-        if 'text' in snapshot:
-            snapshot['text'] = ''
-        return jsonify(snapshot)
+        job_queue.get_queue().enqueue(run_story_creator, job.id,
+                                      job_timeout='30m')
 
-    @app.route('/create-pdf', methods=['POST'])
-    def pdf_route():
-        data = request.json
+        return jsonify({'job_id': job.id, 'status': job.status}), 202
 
+    @app.route('/api/jobs/<job_id>', methods=['GET'])
+    def get_job(job_id):
+        job = _require_job_owner(job_id)
+        # Anonymous heartbeat: every poll from the owner extends the
+        # window. Logged-in jobs don't set last_heartbeat and aren't
+        # affected by the timeout.
+        if job.is_anonymous():
+            job.last_heartbeat = datetime.utcnow()
+            db.session.commit()
+        # Prefer the live Redis counters while the job is running so the
+        # bar moves smoothly; fall back to the DB copy once terminal.
+        if job.status in (STATUS_QUEUED,) or job.is_active():
+            live = job_queue.progress_get(job_id)
+            if live:
+                try:
+                    job.current = int(live.get('current', job.current) or 0)
+                    job.total = int(live.get('total', job.total) or 0)
+                except (TypeError, ValueError):
+                    pass
+        return jsonify(_job_status_payload(job))
+
+    @app.route('/api/jobs/<job_id>/cancel', methods=['POST'])
+    def cancel_job(job_id):
+        job = _require_job_owner(job_id)
+        if job.is_terminal():
+            return jsonify(_job_status_payload(job))
+        job.status = STATUS_CANCELLED
+        job.completed_at = datetime.utcnow()
+        db.session.commit()
+        # Writing Redis last ensures the DB row already says cancelled by
+        # the time the worker sees the flag and exits.
+        job_queue.progress_set(job_id, {'status': STATUS_CANCELLED})
+        return jsonify(_job_status_payload(job))
+
+    @app.route('/api/jobs/<job_id>/pdf', methods=['GET'])
+    def get_job_pdf(job_id):
+        job = _require_job_owner(job_id)
+        if job.status != STATUS_COMPLETE:
+            return jsonify({'error': 'Job is not complete.',
+                            'status': job.status}), 409
+        chapters = job.chapters
+        if not chapters:
+            return jsonify({'error': 'Job has no chapters.'}), 404
+        style = request.args.get('style') or None
         try:
-            story_pdf = StoryPDF(style=data.get('style'))
-
-            pdf_full_path = story_pdf.create(title=data['title'], chapters=data['chapters'])
-
+            story_pdf = StoryPDF(style=style)
+            pdf_full_path = story_pdf.create(title=job.title,
+                                             chapters=chapters)
             if not pdf_full_path:
-                raise ValueError("PDF file path is invalid or empty")
-
-            # Persist the novel for logged-in users so it shows up in their
-            # "My novels" list. Anonymous users get the PDF without saving.
-            if current_user.is_authenticated:
-                title = (data.get('title') or '')[:TITLE_MAX_LENGTH]
-                chapters = data.get('chapters') or []
-                if title and chapters:
-                    novel = Novel(user_id=current_user.id, title=title)
-                    novel.chapters = chapters
-                    db.session.add(novel)
-                    db.session.commit()
-
+                raise ValueError('PDF file path is invalid or empty')
             return send_file(pdf_full_path, as_attachment=True)
-
-        except Exception as e:
-            logger.exception('An error occurred while generating the PDF.')
-
-            # Record failure against the current requester's progress dict
-            # without leaking the server traceback back to the client.
-            progress_data = _get_progress_dict(_current_requester_key())
-            progress_data['fail'] = True
-            progress_data['fail_message'] = 'PDF generation failed.'
-
+        except Exception:
+            logger.exception('Failed to generate PDF for job %s', job_id)
             return jsonify({'error': 'Failed to generate PDF'}), 500
 
     @app.route('/api/my-novels')
@@ -182,13 +223,85 @@ def configure_routes(app, csrf=None, limiter=None):
                              novel_id)
             return jsonify({'error': 'Failed to generate PDF'}), 500
 
+    @app.route('/settings', methods=['GET'])
+    def settings_page():
+        # Anonymous visitors get bounced to login; the button in the header
+        # is still visible so they know the feature exists.
+        if not current_user.is_authenticated:
+            return redirect(url_for('auth.login', next=url_for('settings_page')))
+        return render_template(
+            'settings.html',
+            registry=pt.PROMPT_TEMPLATE_REGISTRY,
+            defaults=pt.get_default_prompts(),
+            overrides=current_user.get_prompt_settings(),
+        )
+
+    @app.route('/api/prompt-settings', methods=['GET'])
+    def api_prompt_settings_get():
+        return jsonify({
+            'logged_in': current_user.is_authenticated,
+            'defaults': pt.get_default_prompts(),
+            'settings': (current_user.get_prompt_settings()
+                         if current_user.is_authenticated else {}),
+            'registry': pt.PROMPT_TEMPLATE_REGISTRY,
+        })
+
+    @app.route('/api/prompt-settings', methods=['POST'])
+    @login_required
+    def api_prompt_settings_save():
+        payload = request.get_json(silent=True) or {}
+        incoming = payload.get('settings')
+        if not isinstance(incoming, dict):
+            return jsonify({'error': 'Expected a JSON object under "settings".'}), 400
+
+        # Whitelist the submitted keys against the registry so users cannot
+        # smuggle arbitrary blobs into the column. Only strings are kept,
+        # and only for keys that exist in the default template.
+        cleaned = {}
+        for group in pt.PROMPT_TEMPLATE_REGISTRY:
+            for tpl in group['templates']:
+                name = tpl['name']
+                if name not in incoming or not isinstance(incoming[name], dict):
+                    continue
+                default = pt.get_default_template(name)
+                tpl_clean = {}
+                for key, value in incoming[name].items():
+                    if not isinstance(value, str):
+                        continue
+                    if isinstance(default, list):
+                        try:
+                            idx = int(key)
+                        except (TypeError, ValueError):
+                            continue
+                        if 0 <= idx < len(default) and value != default[idx]:
+                            tpl_clean[str(idx)] = value
+                    else:
+                        if key in default and value != default[key]:
+                            tpl_clean[key] = value
+                if tpl_clean:
+                    cleaned[name] = tpl_clean
+
+        current_user.set_prompt_settings(cleaned or None)
+        db.session.commit()
+        return jsonify({'ok': True, 'settings': cleaned})
+
+    @app.route('/api/prompt-settings/reset', methods=['POST'])
+    @login_required
+    def api_prompt_settings_reset():
+        current_user.set_prompt_settings(None)
+        db.session.commit()
+        return jsonify({'ok': True})
+
     # JSON API endpoints used by scripts.js: request payloads contain
     # user-supplied data (OpenAI API key, generated chapters) that an
     # attacker cannot forge, so CSRF exposure is negligible.
     if csrf is not None:
-        csrf.exempt(submit_book_writer_form)
-        csrf.exempt(pdf_route)
+        csrf.exempt(create_job)
+        csrf.exempt(cancel_job)
         csrf.exempt(api_me)
+        csrf.exempt(api_prompt_settings_get)
+        csrf.exempt(api_prompt_settings_save)
+        csrf.exempt(api_prompt_settings_reset)
 
     # Apply a stricter rate limit to the expensive novel generation endpoint.
     # Key by user id for logged-in users and by remote address for anonymous
@@ -203,5 +316,5 @@ def configure_routes(app, csrf=None, limiter=None):
         wrapped = limiter.limit(
             '10 per hour',
             key_func=_novel_gen_rate_key,
-        )(submit_book_writer_form)
-        app.view_functions['submit_book_writer_form'] = wrapped
+        )(create_job)
+        app.view_functions['create_job'] = wrapped

@@ -49,7 +49,7 @@ def test_signup_with_csrf_token_succeeds(csrf_client, flask_app):
     assert resp.status_code == 302
 
 
-def test_novel_gen_json_endpoint_is_csrf_exempt(csrf_client, user_factory):
+def test_create_job_json_endpoint_is_csrf_exempt(csrf_client, user_factory):
     """scripts.js posts JSON without a CSRF token; the route exempts itself."""
     user_factory(username='jsonuser', password='password123')
     # Log in using CSRF-protected form by pulling its token.
@@ -65,12 +65,12 @@ def test_novel_gen_json_endpoint_is_csrf_exempt(csrf_client, user_factory):
 
     # The authenticated JSON call should NOT be rejected by CSRF (it may still
     # fail validation inside the handler; we only assert it isn't 400-from-CSRF).
-    resp = csrf_client.post('/novel-gen', json={
-        'title': 't', 'api_key': 'x', 'bulk_model': 'gpt-4o-mini',
+    resp = csrf_client.post('/api/jobs', json={
+        'title': 't', 'api_key': 'x', 'bulk_model': 'gpt-5.4-mini',
         'version': 'bogus',
     })
     # Without a 'summary' field the route returns 400 with a specific message,
     # which is fine -- the key point is CSRF did not block the request.
-    assert resp.status_code in (200, 400)
+    assert resp.status_code in (202, 400)
     if resp.status_code == 400:
         assert b'format not specified' in resp.data

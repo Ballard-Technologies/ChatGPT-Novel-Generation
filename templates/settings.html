@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}Prompt settings{% endblock %}
+{% block content_max_width %}880px{% endblock %}
+{% block content %}
+<div class="settings-header">
+    <h1 class="h4 mb-1">Prompt settings</h1>
+    <p class="text-muted settings-intro">
+        Edit the prompts used for each step of novel generation. Your
+        changes are saved to your account and applied to every generation
+        you run while logged in. Leave a field matching the default to
+        keep using the built-in prompt. Placeholders like
+        <code>{title}</code>, <code>{summary}</code>, <code>{previous_section}</code>
+        must be preserved verbatim or generation will fail.
+    </p>
+</div>
+
+<form id="prompt-settings-form" class="settings-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% for group in registry %}
+    <section class="settings-group">
+        <h2 class="h6 settings-group-title">{{ group['label'] }}</h2>
+        {% for tpl in group['templates'] %}
+        <div class="settings-template">
+            <h3 class="settings-template-title">{{ tpl['label'] }}
+                <span class="settings-template-name">{{ tpl['name'] }}</span>
+            </h3>
+            {% for key in tpl['keys'] %}
+                {% set default_value = defaults[tpl['name']][key] %}
+                {% set override_value = overrides.get(tpl['name'], {}).get(key) %}
+                {% set current_value = override_value if override_value is not none else default_value %}
+                {% set is_modified = override_value is not none %}
+                <div class="settings-field">
+                    <label class="inputLabel">
+                        {% if tpl['kind'] == 'list' %}
+                            {{ tpl['key_labels'][key] if tpl.get('key_labels') and tpl['key_labels'].get(key) else 'Step ' ~ key }}
+                        {% else %}
+                            {{ key }}
+                        {% endif %}
+                        {% if is_modified %}<span class="settings-modified">modified</span>{% endif %}
+                    </label>
+                    <textarea class="form-control settings-textarea"
+                              data-template="{{ tpl['name'] }}"
+                              data-key="{{ key }}"
+                              data-default="{{ default_value|e }}"
+                              rows="6">{{ current_value }}</textarea>
+                    <button type="button" class="other-button settings-reset-btn"
+                            data-template="{{ tpl['name'] }}" data-key="{{ key }}">
+                        Reset this prompt
+                    </button>
+                </div>
+            {% endfor %}
+        </div>
+        {% endfor %}
+    </section>
+    {% endfor %}
+
+    <div class="settings-actions">
+        <a href="/" class="other-button">Back</a>
+        <button type="button" id="settings-reset-all" class="other-button">
+            Reset everything to defaults
+        </button>
+        <button type="submit" class="submit-button">Save prompts</button>
+    </div>
+    <div id="settings-status" class="settings-status" role="status"></div>
+</form>
+
+<script>
+(function () {
+    var form = document.getElementById('prompt-settings-form');
+    var status = document.getElementById('settings-status');
+
+    function setStatus(message, isError) {
+        status.textContent = message || '';
+        status.classList.toggle('settings-status-error', !!isError);
+    }
+
+    function collectSettings() {
+        var settings = {};
+        form.querySelectorAll('textarea.settings-textarea').forEach(function (ta) {
+            var name = ta.dataset.template;
+            var key = ta.dataset.key;
+            var value = ta.value;
+            var def = ta.dataset.default;
+            if (value === def) return;
+            if (!settings[name]) settings[name] = {};
+            settings[name][key] = value;
+        });
+        return settings;
+    }
+
+    form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        setStatus('Saving...');
+        fetch('/api/prompt-settings', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ settings: collectSettings() })
+        }).then(function (r) {
+            if (!r.ok) throw new Error('Save failed (' + r.status + ')');
+            return r.json();
+        }).then(function () {
+            setStatus('Saved.');
+        }).catch(function (err) {
+            setStatus(err.message || 'Save failed.', true);
+        });
+    });
+
+    form.querySelectorAll('.settings-reset-btn').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var ta = form.querySelector(
+                'textarea[data-template="' + btn.dataset.template +
+                '"][data-key="' + btn.dataset.key + '"]'
+            );
+            if (ta) ta.value = ta.dataset.default;
+        });
+    });
+
+    document.getElementById('settings-reset-all').addEventListener('click', function () {
+        if (!confirm('Reset all prompts to defaults? Your saved overrides will be cleared.')) return;
+        setStatus('Resetting...');
+        fetch('/api/prompt-settings/reset', {
+            method: 'POST',
+            credentials: 'same-origin',
+        }).then(function (r) {
+            if (!r.ok) throw new Error('Reset failed (' + r.status + ')');
+            form.querySelectorAll('textarea.settings-textarea').forEach(function (ta) {
+                ta.value = ta.dataset.default;
+            });
+            setStatus('All prompts reset to defaults.');
+        }).catch(function (err) {
+            setStatus(err.message || 'Reset failed.', true);
+        });
+    });
+})();
+</script>
+{% endblock %}
