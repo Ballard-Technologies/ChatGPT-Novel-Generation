@@ -200,7 +200,7 @@ class StoryCreator:
         data = {
             'model': chatgpt_model,
             'messages': [{'role': 'user', 'content': instruction}],
-            'temperature': 1.0
+            'temperature': 0.0
         }
 
         try:
