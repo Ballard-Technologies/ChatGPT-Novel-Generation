@@ -40,7 +40,7 @@ def test_progress_endpoint_does_not_leak_full_text(client, user_factory, flask_a
     from models.user import User
     with flask_app.app_context():
         user = User.query.filter_by(username='progressp').first()
-        routes._reset_progress_dict(user.id)['text'] = 'SECRET NOVEL TEXT'
+        routes._reset_progress_dict(f'u:{user.id}')['text'] = 'SECRET NOVEL TEXT'
 
     resp = client.get('/progress')
     assert resp.status_code == 200
@@ -65,10 +65,32 @@ def test_two_users_have_independent_progress(flask_app, user_factory):
         u1_id = User.query.filter_by(username='progressu1').first().id
         u2_id = User.query.filter_by(username='progressu2').first().id
 
-    routes._reset_progress_dict(u1_id)['current'] = 1
-    routes._reset_progress_dict(u2_id)['current'] = 999
+    routes._reset_progress_dict(f'u:{u1_id}')['current'] = 1
+    routes._reset_progress_dict(f'u:{u2_id}')['current'] = 999
 
     r1 = c1.get('/progress').get_json()
     r2 = c2.get('/progress').get_json()
     assert r1['current'] == 1
     assert r2['current'] == 999
+
+
+def test_two_anonymous_clients_have_independent_progress(flask_app):
+    """Anonymous browsers get per-session progress via the Flask session."""
+    c1 = flask_app.test_client()
+    c2 = flask_app.test_client()
+
+    # First request establishes each client's anonymous session id.
+    c1.get('/progress')
+    c2.get('/progress')
+
+    with c1.session_transaction() as s1:
+        anon1 = s1['anon_id']
+    with c2.session_transaction() as s2:
+        anon2 = s2['anon_id']
+    assert anon1 != anon2
+
+    routes._reset_progress_dict(f'a:{anon1}')['current'] = 11
+    routes._reset_progress_dict(f'a:{anon2}')['current'] = 22
+
+    assert c1.get('/progress').get_json()['current'] == 11
+    assert c2.get('/progress').get_json()['current'] == 22

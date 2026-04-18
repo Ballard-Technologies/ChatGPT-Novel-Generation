@@ -30,6 +30,8 @@
             </div>
             <div class="user-menu" id="user-menu" style="margin-left:auto;display:flex;align-items:center;gap:12px;">
                 <span id="user-username" class="text-muted"></span>
+                <a href="/login" class="other-button" id="login-link" style="display:none;">Log in</a>
+                <a href="/signup" class="other-button" id="signup-link" style="display:none;">Sign up</a>
                 <a href="/logout" class="other-button" id="logout-link" style="display:none;">Log out</a>
             </div>
         </div>
@@ -61,6 +63,7 @@
                             <option value="v1">v1</option>
                             <option value="v2" selected>v2</option>
                         </select>
+                        <div id="novel-gen-version-desc" class="style-desc"></div>
                     </div>
                     <div class="field">
                         <label class="inputLabel" for="novel-gen-prompt-type">Prompt Type</label>
@@ -102,6 +105,17 @@
                     </div>
                 </div>
 
+                <div class="field">
+                    <label class="inputLabel" for="novel-gen-style">Output Style</label>
+                    <select id="novel-gen-style" name="novel-gen-style">
+                        <option value="classic" selected>Classic</option>
+                        <option value="modern">Modern</option>
+                        <option value="compact">Compact</option>
+                        <option value="manuscript">Manuscript</option>
+                    </select>
+                    <div id="novel-gen-style-desc" class="style-desc"></div>
+                </div>
+
                 <div class="form-actions">
                     <button type="submit" class="submit-button">Generate Novel</button>
                 </div>
@@ -113,6 +127,14 @@
                 <div class="loading-bar" id="novel-gen-loading-bar"></div>
                 <div class="loading-percent" id="novel-gen-loading-percent">0%</div>
             </div>
+        </div>
+
+        <div id="my-novels" class="card-surface" style="display:none;">
+            <h2 class="h5 mb-3">My Novels</h2>
+            <div id="my-novels-empty" class="text-muted" style="display:none;">
+                You haven't generated any novels yet.
+            </div>
+            <ul id="my-novels-list" class="list-unstyled m-0"></ul>
         </div>
     </main>
 

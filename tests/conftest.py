@@ -26,6 +26,7 @@ import pytest  # noqa: E402
 
 import app as app_module  # noqa: E402
 from models import db  # noqa: E402
+from models.novel import Novel  # noqa: E402
 from models.user import User  # noqa: E402
 
 
@@ -51,8 +52,11 @@ def flask_app():
 
 @pytest.fixture(autouse=True)
 def _clean_db(flask_app):
-    """Empty user rows and reset rate-limit counters between tests."""
+    """Empty user/novel rows and reset rate-limit counters between tests."""
     with flask_app.app_context():
+        # Novels reference users; delete them first so foreign-key constraints
+        # are satisfied on engines that actually enforce them.
+        db.session.query(Novel).delete()
         db.session.query(User).delete()
         db.session.commit()
     try:

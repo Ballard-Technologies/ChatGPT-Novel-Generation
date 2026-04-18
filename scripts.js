@@ -1,20 +1,70 @@
 let wordList = [];
 
+const STYLE_DESCRIPTIONS = {
+    classic: 'Times serif, indented paragraphs, traditional book look.',
+    modern: 'Helvetica sans-serif, no indent, blank line between paragraphs.',
+    compact: 'Smaller font and tighter spacing to fit more on each page.',
+    manuscript: 'Courier typewriter font with generous line height.'
+};
+
+const VERSION_DESCRIPTIONS = {
+    v0: 'Sequential single-pass pipeline: enhances the summary, splits it into parts, expands each in order, and stitches adjacent sections. Simplest and slowest; weakest long-form continuity.',
+    v1: 'Builds author, character, and theme context before writing chapters in parallel threads. Faster than v0 with stronger continuity.',
+    v2: 'Extends v1 with an extra novel-framework planning step, chapter numbering, and refined prompts at lower temperature for the most consistent output. Recommended.'
+};
+
 function loadCurrentUser() {
     fetch('/api/me', { credentials: 'same-origin' })
         .then(function (response) {
-            if (response.status === 401) {
-                window.location.href = '/login';
-                return null;
-            }
             return response.ok ? response.json() : null;
         })
         .then(function (data) {
-            if (!data) return;
-            $('#user-username').text(data.username);
-            $('#logout-link').show();
+            if (data && data.username) {
+                $('#user-username').text(data.username);
+                $('#logout-link').show();
+                $('#login-link').hide();
+                $('#signup-link').hide();
+                loadMyNovels();
+            } else {
+                $('#user-username').text('');
+                $('#logout-link').hide();
+                $('#login-link').show();
+                $('#signup-link').show();
+                $('#my-novels').hide();
+            }
         })
         .catch(function (err) { console.error('Failed to load user:', err); });
+}
+
+function loadMyNovels() {
+    fetch('/api/my-novels', { credentials: 'same-origin' })
+        .then(function (response) { return response.ok ? response.json() : []; })
+        .then(function (novels) {
+            var $section = $('#my-novels');
+            var $list = $('#my-novels-list').empty();
+            var $empty = $('#my-novels-empty');
+            $section.show();
+            if (!novels.length) {
+                $empty.show();
+                return;
+            }
+            $empty.hide();
+            novels.forEach(function (n) {
+                var created = new Date(n.created_at).toLocaleString();
+                var $item = $('<li>', { 'class': 'my-novel-row' });
+                var $meta = $('<div>', { 'class': 'my-novel-meta' })
+                    .append($('<div>', { 'class': 'my-novel-title', text: n.title }))
+                    .append($('<div>', { 'class': 'my-novel-date', text: created }));
+                var $download = $('<a>', {
+                    'class': 'other-button',
+                    href: '/api/my-novels/' + n.id + '/pdf',
+                    text: 'Download PDF',
+                });
+                $item.append($meta).append($download);
+                $list.append($item);
+            });
+        })
+        .catch(function (err) { console.error('Failed to load novels:', err); });
 }
 
 $(document).ready(function () {
@@ -63,6 +113,10 @@ $(document).ready(function () {
         formData['title'] = $('#novel-gen-title').val().trim();
         formData["api_key"] = $("#api-key-input").val();
 
+        // Capture the selected output style at submit time so it's used
+        // by the subsequent /create-pdf request regardless of later UI changes.
+        let selectedStyle = $('#novel-gen-style').val();
+
         $.ajax({
             type: "POST",
             url: "/novel-gen",
@@ -87,7 +141,7 @@ $(document).ready(function () {
             },
             complete: function () {
                 // Hide the loading bar when the request is complete
-                updateLoadingBar(formData.title, prefix);
+                updateLoadingBar(formData.title, prefix, selectedStyle);
             }
         });
     });
@@ -96,7 +150,7 @@ $(document).ready(function () {
     $('#novel-gen-prompt-type').change(function() {
         // Get the selected value
         var selectedOption = $(this).val();
-        
+
         // Hide both tabs initially
         $('#novel-gen-outline-tab').hide();
         $('#novel-gen-summary-tab').hide();
@@ -111,6 +165,18 @@ $(document).ready(function () {
 
     // Trigger the change event on page load to ensure the correct tab is shown
     $('#novel-gen-prompt-type').trigger('change');
+
+    // Update the output-style description when the selection changes.
+    $('#novel-gen-style').change(function () {
+        var key = $(this).val();
+        $('#novel-gen-style-desc').text(STYLE_DESCRIPTIONS[key] || '');
+    }).trigger('change');
+
+    // Update the generation-version description when the selection changes.
+    $('#novel-gen-version').change(function () {
+        var key = $(this).val();
+        $('#novel-gen-version-desc').text(VERSION_DESCRIPTIONS[key] || '');
+    }).trigger('change');
 
     fetch('assets/word_list.csv')
         .then(response => {
@@ -305,7 +371,7 @@ async function testOpenAIKey() {
 }
 
 // Function to periodically fetch progress and update the loading bar
-function updateLoadingBar(title, prefix) {
+function updateLoadingBar(title, prefix, style) {
     $.get('/progress', function (data) {
         if (data.fail) {
             $('#' + prefix + '-loading-bar-container').hide();
@@ -319,18 +385,18 @@ function updateLoadingBar(title, prefix) {
         }
 
         if (data.complete) {
-            deliverPDF(data.chapters, title);
+            deliverPDF(data.chapters, title, style);
             $('#' + prefix + '-loading-bar-container').hide();
         }
         else {
-            setTimeout(() => updateLoadingBar(title, prefix), 10000); // Update every 10 seconds
+            setTimeout(() => updateLoadingBar(title, prefix, style), 10000); // Update every 10 seconds
         }
     });
 }
 
-function deliverPDF(chapters, title) {
+function deliverPDF(chapters, title, style) {
     // Prepare the data to be sent in the request
-    const data = JSON.stringify({chapters: chapters, title: title});
+    const data = JSON.stringify({chapters: chapters, title: title, style: style});
     console.log("Sending data:", data);
 
     // Use the fetch API to send the POST request
@@ -372,6 +438,10 @@ function deliverPDF(chapters, title) {
         a.click();
         window.URL.revokeObjectURL(url);
         a.remove();
+        // Refresh the My Novels list so a freshly-persisted row shows up.
+        if ($('#my-novels').is(':visible')) {
+            loadMyNovels();
+        }
     })
     .catch(error => {
         console.error('Error creating PDF:', error);

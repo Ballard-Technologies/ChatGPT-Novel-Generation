@@ -19,6 +19,7 @@ from controllers.auth import auth_bp
 from controllers.routes import configure_routes
 from models import db
 from models.user import User
+from models.novel import Novel  # noqa: F401  (registers the table with SQLAlchemy)
 
 IS_PRODUCTION = os.environ.get('ENV') == 'production'
 

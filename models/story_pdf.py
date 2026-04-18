@@ -4,21 +4,58 @@ import datetime
 from werkzeug.utils import secure_filename
 from fpdf import FPDF
 
+# Named output style presets. Each entry overrides the visual formatting
+# applied by StoryPDF without changing document structure.
+STYLES = {
+    'classic': {
+        'title_font': 'Times', 'body_font': 'Times',
+        'title_font_size': 24, 'body_font_size': 12,
+        'line_height': 8, 'indent': 10, 'margin': 20,
+        'paragraph_spacing': 0,
+    },
+    'modern': {
+        'title_font': 'Helvetica', 'body_font': 'Helvetica',
+        'title_font_size': 26, 'body_font_size': 11,
+        'line_height': 7, 'indent': 0, 'margin': 25,
+        'paragraph_spacing': 4,
+    },
+    'compact': {
+        'title_font': 'Times', 'body_font': 'Times',
+        'title_font_size': 20, 'body_font_size': 10,
+        'line_height': 5, 'indent': 6, 'margin': 15,
+        'paragraph_spacing': 0,
+    },
+    'manuscript': {
+        'title_font': 'Courier', 'body_font': 'Courier',
+        'title_font_size': 18, 'body_font_size': 12,
+        'line_height': 12, 'indent': 10, 'margin': 25,
+        'paragraph_spacing': 0,
+    },
+}
+DEFAULT_STYLE = 'classic'
+
+
 class StoryPDF:
-    def __init__(self):
+    def __init__(self, style=None):
         self.title = ''
         self.text = ''
 
+        preset = STYLES.get(style) if style else None
+        if preset is None:
+            preset = STYLES[DEFAULT_STYLE]
+        self.style = style if style in STYLES else DEFAULT_STYLE
+
         # Define constants for PDF creation
-        self.MARGIN = 20  # Margin in mm
+        self.MARGIN = preset['margin']  # Margin in mm
         self.PAGE_WIDTH = 170  # Standard A4 width in mm
         self.PAGE_HEIGHT = 297  # Standard A4 height in mm
-        self.TITLE_FONT = 'Times'
-        self.TITLE_FONT_SIZE = 24  # Font size for title
-        self.BODY_FONT = 'Times'
-        self.BODY_FONT_SIZE = 12  # Font size for body text
-        self.INDENT = 10  # Indentation for paragraphs in mm
-        self.LINE_HEIGHT = 8  # Line height for body text in mm
+        self.TITLE_FONT = preset['title_font']
+        self.TITLE_FONT_SIZE = preset['title_font_size']
+        self.BODY_FONT = preset['body_font']
+        self.BODY_FONT_SIZE = preset['body_font_size']
+        self.INDENT = preset['indent']  # Indentation for paragraphs in mm
+        self.LINE_HEIGHT = preset['line_height']  # Line height in mm
+        self.PARAGRAPH_SPACING = preset['paragraph_spacing']
         self.PDF_DIR = '/tmp/transformed_books'  # Directory for saving PDFs
 
     def sanitizeText(self, text):
@@ -82,11 +119,13 @@ class StoryPDF:
             chapter_page_no = pdf.page_no() + 1  # Since we'll add a new page
             toc_entries.append((chapter_title, chapter_page_no))
 
-            for paragraph in paragraphs: 
+            for paragraph in paragraphs:
                 paragraph = paragraph.strip()
                 if paragraph:
                     pdf.set_x(pdf.l_margin + indent)
                     pdf.multi_cell(0, line_height, paragraph)
+                    if self.PARAGRAPH_SPACING:
+                        pdf.ln(self.PARAGRAPH_SPACING)
                 else:
                     pdf.ln(6)
                 pdf.set_font(self.BODY_FONT, size=self.BODY_FONT_SIZE)
