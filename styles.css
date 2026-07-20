@@ -303,7 +303,8 @@ select:focus {
 }
 
 input::placeholder,
-textarea::placeholder {
+textarea::placeholder,
+.form-control::placeholder {
     color: var(--text-dim);
 }
 
@@ -332,6 +333,17 @@ select option {
 }
 
 .title-row input[type="text"] {
+    flex: 1;
+}
+
+/* Summary row: textarea + dice button */
+.summary-row {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+}
+
+.summary-row textarea {
     flex: 1;
 }
 

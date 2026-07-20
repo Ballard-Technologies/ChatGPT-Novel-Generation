@@ -210,6 +210,12 @@ $(document).ready(function () {
         e.preventDefault();
         $('#novel-gen-title').val(generateRandomTitle());
     });
+
+    // Attach the click event to the button with the die icon to generate a summary
+    $('#generate-summary-btn').click(function (e) {
+        e.preventDefault();
+        $('#summaryTextarea').val(generateRandomSummary());
+    });
 });
 
 function addInputField() {
@@ -625,4 +631,38 @@ function toTitleCase(title) {
 // Helper function to capitalize a single word
 function capitalizeWord(word) {
     return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+}
+
+function generateRandomSummary() {
+    const adjectives = wordList.filter(row => row.Type === 'adj').map(row => row.Word);
+    const nouns = wordList.filter(row => row.Type === 'noun').map(row => row.Word);
+    const verbs = wordList.filter(row => row.Type === 'verb').map(row => row.Word);
+
+    const summaryStructures = [
+        "In a {adj} {noun} ruled by a {adj} {noun}, a {adj} {noun} must {verb} the {noun} before the {adj} {noun} can {verb} the {noun}. Along the way, they {verb} an unexpected {noun} and confront the {adj} truth about the {noun}.",
+        "When the {adj} {noun} begins to {verb}, a reluctant {noun} discovers that the {noun} of {noun} is not what it seems. To {verb} the {adj} {noun}, they must face the {noun} they once called home.",
+        "A {adj} {noun} and a {adj} {noun} are forced to {verb} together when a {adj} {noun} threatens to {verb} their {noun}. Their journey through the {adj} {noun} will test every {noun} they hold dear.",
+        "For years the {noun} kept the {adj} {noun} hidden, but now a {adj} {noun} has returned to {verb} what was lost. As {adj} {noun} gather on the horizon, the {noun} of {noun} hangs in the balance.",
+        "After the {adj} {noun} {verb} the {noun}, only a {adj} {noun} remains to {verb} the {adj} {noun}. What they {verb} in the ruins will {verb} the {noun} forever."
+    ];
+
+    const getRandomElement = arr => arr[Math.floor(Math.random() * arr.length)];
+
+    const structure = getRandomElement(summaryStructures);
+
+    let summary = structure
+        .replace(/{adj}/g, () => getRandomElement(adjectives))
+        .replace(/{noun}/g, () => getRandomElement(nouns))
+        .replace(/{verb}/g, () => getRandomElement(verbs));
+
+    // Normalize casing: lowercase everything, then capitalize the first
+    // letter of each sentence so the summary reads like prose.
+    summary = summary.toLowerCase().replace(
+        /(^|[.!?]\s+)([a-z])/g,
+        (_m, sep, ch) => sep + ch.toUpperCase()
+    );
+
+    console.log("Generated Summary: ", summary);
+
+    return summary;
 }
